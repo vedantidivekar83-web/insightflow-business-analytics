@@ -1,0 +1,78 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging / temporary build artifacts
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+
+# Streamlit Local Configuration & Secrets
+.streamlit/secrets.toml
+
+# User-Uploaded Datasets (Preserves sample datasets in repository while ignoring user data)
+data/uploads/
+
+# Testing, Coverage & Temporary Caches
+.cache
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+*.log
+*.tmp
+
+# Development Scripts & Temporary Automation
+scripts/dev/
+
+# Internal Scratch, Diagnostics & Local QA Artifacts
+scratch/
+/*.png
+!docs/images/*.png
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints
+
+# IDE & Editor Configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating System Temporary Files
+.DS_Store
+Thumbs.db
+desktop.ini
