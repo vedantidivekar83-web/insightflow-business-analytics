@@ -176,7 +176,7 @@ class TestMachineLearningFeatures(unittest.TestCase):
         task_clf = infer_ml_task(self.df_classification, "Churn")
         self.assertEqual(task_clf["task_type"], "classification")
 
-    def test_prepare_features_prevents_leakage(self) -> None:
+    def test_prepare_features_excludes_target_column(self) -> None:
         """Verify target column is never included in preprocessed feature matrix X."""
         X, y, feats = prepare_features(self.df_regression, target_col="Revenue")
         self.assertNotIn("Revenue", X.columns)
@@ -225,6 +225,62 @@ class TestMachineLearningFeatures(unittest.TestCase):
         """Verify classification rejects target with only 1 class."""
         res = train_predictive_model(self.df_single_class, target_col="Target")
         self.assertEqual(res["status"], "error")
+
+    def test_predictive_model_leak_free_pipeline(self) -> None:
+        """Verify model pipeline encapsulates preprocessing and avoids data leakage with missing values."""
+        from sklearn.pipeline import Pipeline
+        from sklearn.compose import ColumnTransformer
+
+        df_leak_test = pd.DataFrame(
+            {
+                "Spend": [10.0, 20.0, np.nan, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0],
+                "Category": ["A", "B", "A", "B", "A", "B", "A", "B", "A", "B", "A", "B"],
+                "Sales": [15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0, 95.0, 105.0, 115.0, 125.0],
+            }
+        )
+        res = train_predictive_model(
+            df=df_leak_test,
+            target_col="Sales",
+            model_name="Linear Regression",
+            test_size=0.25,
+            random_state=42,
+        )
+        self.assertEqual(res["status"], "ok")
+        self.assertIn("pipeline", res)
+        pipeline = res["pipeline"]
+        self.assertIsInstance(pipeline, Pipeline)
+        preprocessor = pipeline.named_steps["preprocessor"]
+        self.assertIsInstance(preprocessor, ColumnTransformer)
+
+        # Test end-to-end inference on raw unseen data with missing values without data leakage
+        raw_new_df = pd.DataFrame({"Spend": [np.nan, 50.0], "Category": ["A", "B"]})
+        preds = pipeline.predict(raw_new_df)
+        self.assertEqual(len(preds), 2)
+        self.assertTrue(np.all(np.isfinite(preds)))
+
+    def test_predictive_model_unseen_category_in_test_set(self) -> None:
+        """Verify pipeline handles unseen categorical levels gracefully without throwing exceptions."""
+        df_cat = pd.DataFrame(
+            {
+                "Num": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+                "Tier": ["Gold", "Silver", "Gold", "Silver", "Gold", "Silver", "Gold", "Silver", "Gold", "Silver", "Gold", "Silver"],
+                "Score": [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+            }
+        )
+        res = train_predictive_model(
+            df=df_cat,
+            target_col="Score",
+            model_name="Linear Regression",
+            test_size=0.25,
+        )
+        self.assertEqual(res["status"], "ok")
+        pipeline = res["pipeline"]
+
+        # Predict on totally unseen category 'Platinum'
+        test_unknown = pd.DataFrame({"Num": [15.0], "Tier": ["Platinum"]})
+        pred = pipeline.predict(test_unknown)
+        self.assertEqual(len(pred), 1)
+        self.assertTrue(np.isfinite(pred[0]))
 
     # -------------------------------------------------------------------------
     # Time-Series Forecasting Tests

@@ -18,6 +18,7 @@ from src.analytics.quality import (
 from src.analytics.kpi import (
     detect_business_columns,
     compute_business_kpis,
+    _clean_header,
 )
 from src.analytics.correlation import (
     compute_correlation_matrix,
@@ -259,6 +260,46 @@ class TestAnalyticsEngine(unittest.TestCase):
             render_analytics_view()
             calls = [str(c) for c in mock_markdown.call_args_list]
             self.assertTrue(any("No Active Dataset for Analytics" in c for c in calls))
+
+    def test_unicode_normalization_header_matching(self) -> None:
+        """Verify Unicode normalization strips Latin accents and maps headers to base ASCII."""
+        self.assertEqual(_clean_header("Quantité"), "quantite")
+        self.assertEqual(_clean_header("Coût Unitaire ($)"), "coutunitaire")
+        self.assertEqual(_clean_header("Ventes (€)"), "ventes")
+        self.assertEqual(_clean_header("Bénéfice Net"), "beneficenet")
+        self.assertEqual(_clean_header("Numéro de Commande"), "numerodecommande")
+        self.assertEqual(_clean_header("Año"), "ano")
+        self.assertEqual(_clean_header("État"), "etat")
+        self.assertEqual(_clean_header("Chiffre d'Affaires"), "chiffredaffaires")
+
+    def test_business_kpis_accented_international_headers(self) -> None:
+        """Verify business KPI engine recognizes accented international headers and infers metrics."""
+        intl_df = pd.DataFrame(
+            {
+                "Quantité": [10, 20],
+                "Coût Unitaire ($)": [15.0, 30.0],
+                "Statut": ["Livré", "En cours"],
+            }
+        )
+        res = compute_business_kpis(intl_df)
+        detected = res["detected_columns"]
+        self.assertEqual(detected["quantity"], "Quantité")
+        self.assertEqual(detected["unit_price"], "Coût Unitaire ($)")
+        self.assertEqual(detected["status"], "Statut")
+
+        inferred = res["inferred_kpis"]
+        self.assertEqual(len(inferred), 2)
+        rev_kpi = next(k for k in inferred if "Revenue" in k["name"])
+        # (10*15) + (20*30) = 150 + 600 = 750
+        self.assertEqual(rev_kpi["value"], 750.0)
+
+        aov_kpi = next(k for k in inferred if "Order Value" in k["name"])
+        self.assertEqual(aov_kpi["value"], 375.0)
+
+        # Status distribution computed
+        status_dist = res["status_distribution"]
+        self.assertIsNotNone(status_dist)
+        self.assertEqual(len(status_dist), 2)
 
 
 if __name__ == "__main__":

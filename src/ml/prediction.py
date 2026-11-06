@@ -85,16 +85,64 @@ def infer_ml_task(df: pd.DataFrame, target_col: str) -> dict[str, Any]:
     }
 
 
+def build_preprocessing_pipeline(
+    numerical_cols: list[str],
+    categorical_cols: list[str],
+) -> Any:
+    """Build a Scikit-learn ColumnTransformer for leak-free preprocessing.
+
+    Applies median imputation to numerical features and most-frequent imputation
+    plus one-hot encoding (with drop='first' and handle_unknown='ignore') to
+    categorical features.
+    """
+    from sklearn.compose import ColumnTransformer
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import OneHotEncoder
+
+    transformers = []
+    if numerical_cols:
+        num_pipeline = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="median")),
+            ]
+        )
+        transformers.append(("num", num_pipeline, numerical_cols))
+
+    if categorical_cols:
+        cat_pipeline = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="most_frequent")),
+                (
+                    "onehot",
+                    OneHotEncoder(
+                        drop="first",
+                        sparse_output=False,
+                        handle_unknown="ignore",
+                    ),
+                ),
+            ]
+        )
+        transformers.append(("cat", cat_pipeline, categorical_cols))
+
+    return ColumnTransformer(transformers=transformers, remainder="drop")
+
+
 def prepare_features(
     df: pd.DataFrame,
     target_col: str,
     feature_cols: list[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.Series, list[str]]:
-    """Clean, impute, and encode feature columns while strictly avoiding target leakage.
+    """Clean, impute, and encode feature columns for standalone exploratory analysis.
+
+    Note:
+        This is a standalone exploratory feature-extraction utility. For supervised
+        model training and held-out evaluation, use train_predictive_model() which
+        encapsulates preprocessing inside a leak-free Scikit-learn Pipeline.
 
     Args:
         df: Input DataFrame.
-        target_col: Name of the target variable.
+        target_col: Name of the target variable (strictly excluded from features).
         feature_cols: Optional subset of feature column names.
 
     Returns:
@@ -132,21 +180,23 @@ def prepare_features(
     X_raw = clean_df[candidate_cols].copy()
     y_raw = clean_df[target_col].copy()
 
-    # Impute missing values
-    for col in candidate_cols:
-        if pd.api.types.is_numeric_dtype(X_raw[col]):
-            median_val = X_raw[col].median()
-            X_raw[col] = X_raw[col].fillna(median_val if pd.notna(median_val) else 0.0)
-        else:
-            mode_val = X_raw[col].mode()
-            fill_val = str(mode_val.iloc[0]) if not mode_val.empty else "Missing"
-            X_raw[col] = X_raw[col].astype(str).fillna(fill_val)
+    if not is_sklearn_available():
+        return pd.DataFrame(), y_raw, []
 
-    # One-hot encode categorical features (using drop_first=True to avoid collinearity)
-    X_encoded = pd.get_dummies(X_raw, drop_first=True, dtype=float)
-    feature_names = list(X_encoded.columns)
+    num_cols = [c for c in candidate_cols if pd.api.types.is_numeric_dtype(X_raw[c])]
+    cat_cols = [c for c in candidate_cols if c not in num_cols]
 
-    return X_encoded, y_raw, feature_names
+    for c in cat_cols:
+        X_raw[c] = X_raw[c].astype(object)
+
+    preprocessor = build_preprocessing_pipeline(num_cols, cat_cols)
+    try:
+        X_trans = preprocessor.fit_transform(X_raw)
+        feature_names = [f.split("__", 1)[-1] for f in preprocessor.get_feature_names_out()]
+        X_encoded = pd.DataFrame(X_trans, columns=feature_names, index=X_raw.index)
+        return X_encoded, y_raw, feature_names
+    except Exception:
+        return pd.DataFrame(), y_raw, []
 
 
 def train_predictive_model(
@@ -158,6 +208,9 @@ def train_predictive_model(
     random_state: int = 42,
 ) -> dict[str, Any]:
     """Train a supervised ML model, evaluate on held-out test data, and extract feature importances.
+
+    Imputation and categorical encoding are encapsulated inside a Scikit-learn Pipeline
+    and fit exclusively on training data to prevent data leakage.
 
     Args:
         df: Input DataFrame.
@@ -194,22 +247,54 @@ def train_predictive_model(
 
     task_type = task_info["task_type"]
 
-    X, y, feature_names = prepare_features(df, target_col, feature_cols)
-    if X.empty or len(X) < 10 or len(feature_names) == 0:
+    # Drop rows where target is NaN
+    clean_df = df.dropna(subset=[target_col]).copy()
+    if clean_df.empty:
         return {
             "status": "error",
-            "message": f"Insufficient data ({len(X)} rows, {len(feature_names)} features). Predictive modeling requires at least 10 observations and 1 predictor feature.",
+            "message": "Dataset contains no valid records after dropping missing target values.",
             "metrics": {},
             "feature_importance": pd.DataFrame(),
             "sample_predictions": pd.DataFrame(),
             "explanation": "",
         }
 
-    # Verify classification has at least 2 distinct classes in target
-    if task_type == "classification" and y.nunique() < 2:
+    # Determine candidate features (excluding target to prevent leakage)
+    if feature_cols:
+        candidate_cols = [c for c in feature_cols if c in clean_df.columns and c != target_col]
+    else:
+        # Auto-select features: drop target, high-cardinality ID columns, and constant columns
+        candidate_cols = []
+        for col in clean_df.columns:
+            if col == target_col:
+                continue
+            col_s = clean_df[col]
+            # Exclude constant columns
+            if col_s.nunique() <= 1:
+                continue
+            # Exclude high-cardinality string IDs (e.g. 100% unique strings like UUIDs)
+            if col_s.dtype == object and col_s.nunique() == len(clean_df) and len(clean_df) > 15:
+                continue
+            candidate_cols.append(col)
+
+    if not candidate_cols or len(clean_df) < 10:
         return {
             "status": "error",
-            "message": f"Target '{target_col}' has only {y.nunique()} unique class. Classification requires at least 2 distinct classes.",
+            "message": f"Insufficient data ({len(clean_df)} rows, {len(candidate_cols)} candidate features). Predictive modeling requires at least 10 observations and 1 predictor feature.",
+            "metrics": {},
+            "feature_importance": pd.DataFrame(),
+            "sample_predictions": pd.DataFrame(),
+            "explanation": "",
+        }
+
+    X_raw = clean_df[candidate_cols].copy()
+    y_raw = clean_df[target_col].copy()
+
+    # Verify classification has at least 2 distinct classes in target
+    if task_type == "classification" and y_raw.nunique() < 2:
+        return {
+            "status": "error",
+            "message": f"Target '{target_col}' has only {y_raw.nunique()} unique class. Classification requires at least 2 distinct classes.",
             "metrics": {},
             "feature_importance": pd.DataFrame(),
             "sample_predictions": pd.DataFrame(),
@@ -219,56 +304,92 @@ def train_predictive_model(
     from sklearn.model_selection import train_test_split
     from sklearn.linear_model import LinearRegression, LogisticRegression
     from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+    from sklearn.pipeline import Pipeline
 
-    # Train / Test Split
+    # Train / Test Split BEFORE preprocessing to strictly prevent data leakage
     test_frac = float(np.clip(test_size, 0.1, 0.4))
-    stratify = y if (task_type == "classification" and (y.value_counts() >= 2).all()) else None
+    stratify = y_raw if (task_type == "classification" and (y_raw.value_counts() >= 2).all()) else None
 
     try:
         X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
+            X_raw,
+            y_raw,
             test_size=test_frac,
             random_state=random_state,
             stratify=stratify,
         )
-    except Exception as e:
+    except Exception:
         # Fallback without stratification if rare classes exist
         X_train, X_test, y_train, y_test = train_test_split(
-            X,
-            y,
+            X_raw,
+            y_raw,
             test_size=test_frac,
             random_state=random_state,
         )
+
+    X_train = X_train.copy()
+    X_test = X_test.copy()
+
+    # Separate numerical and categorical columns
+    num_cols = [c for c in candidate_cols if pd.api.types.is_numeric_dtype(X_train[c])]
+    cat_cols = [c for c in candidate_cols if c not in num_cols]
+
+    for c in cat_cols:
+        X_train[c] = X_train[c].astype(object)
+        X_test[c] = X_test[c].astype(object)
+
+    preprocessor = build_preprocessing_pipeline(num_cols, cat_cols)
 
     # Model Selection & Instantiation
     actual_model_name = model_name
     if task_type == "regression":
         if model_name in ["auto", "Random Forest Regressor"]:
-            model = RandomForestRegressor(n_estimators=100, max_depth=8, random_state=random_state)
+            estimator = RandomForestRegressor(n_estimators=100, max_depth=8, random_state=random_state)
             actual_model_name = "Random Forest Regressor"
         else:
-            model = LinearRegression()
+            estimator = LinearRegression()
             actual_model_name = "Linear Regression"
     else:  # classification
         # Convert target to string class labels
         y_train = y_train.astype(str)
         y_test = y_test.astype(str)
         if model_name in ["auto", "Random Forest Classifier"]:
-            model = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=random_state)
+            estimator = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=random_state)
             actual_model_name = "Random Forest Classifier"
         else:
-            model = LogisticRegression(max_iter=1000, random_state=random_state)
+            estimator = LogisticRegression(max_iter=1000, random_state=random_state)
             actual_model_name = "Logistic Regression"
 
-    # Fit Model
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("model", estimator),
+        ]
+    )
+
+    # Fit Pipeline exclusively on training data and evaluate on held-out test data
     try:
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
+        pipeline.fit(X_train, y_train)
+        y_pred = pipeline.predict(X_test)
     except Exception as e:
         return {
             "status": "error",
             "message": f"Model training failed: {str(e)}",
+            "metrics": {},
+            "feature_importance": pd.DataFrame(),
+            "sample_predictions": pd.DataFrame(),
+            "explanation": "",
+        }
+
+    # Extract transformed feature names
+    trained_preprocessor = pipeline.named_steps["preprocessor"]
+    trained_model = pipeline.named_steps["model"]
+    feature_names = [f.split("__", 1)[-1] for f in trained_preprocessor.get_feature_names_out()]
+
+    if len(feature_names) == 0:
+        return {
+            "status": "error",
+            "message": "No valid predictor features remained after preprocessing.",
             "metrics": {},
             "feature_importance": pd.DataFrame(),
             "sample_predictions": pd.DataFrame(),
@@ -295,8 +416,8 @@ def train_predictive_model(
 
     # Extract Feature Importances / Coefficients
     importances_list: list[dict[str, Any]] = []
-    if hasattr(model, "feature_importances_"):
-        raw_imp = model.feature_importances_
+    if hasattr(trained_model, "feature_importances_"):
+        raw_imp = trained_model.feature_importances_
         total_imp = raw_imp.sum() if raw_imp.sum() > 0 else 1.0
         for feat, val in zip(feature_names, raw_imp):
             importances_list.append(
@@ -305,8 +426,8 @@ def train_predictive_model(
                     "Importance (%)": round(float((val / total_imp) * 100.0), 2),
                 }
             )
-    elif hasattr(model, "coef_"):
-        coef_arr = np.abs(model.coef_)
+    elif hasattr(trained_model, "coef_"):
+        coef_arr = np.abs(trained_model.coef_)
         if coef_arr.ndim > 1:
             coef_arr = coef_arr.mean(axis=0)
         total_coef = coef_arr.sum() if coef_arr.sum() > 0 else 1.0
@@ -327,7 +448,7 @@ def train_predictive_model(
     if task_type == "regression":
         sample_df = pd.DataFrame(
             {
-                "Actual Value": np.round(np.asarray(y_test[:sample_size], dtype=float), 2),
+                "Actual Value": np.round(np.asarray(y_test.iloc[:sample_size], dtype=float), 2),
                 "Model Prediction": np.round(np.asarray(y_pred[:sample_size], dtype=float), 2),
             }
         )
@@ -335,7 +456,7 @@ def train_predictive_model(
     else:
         sample_df = pd.DataFrame(
             {
-                "Actual Class": np.asarray(y_test[:sample_size], dtype=str),
+                "Actual Class": np.asarray(y_test.iloc[:sample_size], dtype=str),
                 "Model Prediction": np.asarray(y_pred[:sample_size], dtype=str),
             }
         )
@@ -371,4 +492,5 @@ def train_predictive_model(
         "feature_importance": imp_df,
         "sample_predictions": sample_df,
         "explanation": narrative,
+        "pipeline": pipeline,
     }

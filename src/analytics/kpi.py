@@ -7,6 +7,7 @@ Clearly labels all assumptions.
 
 from typing import Any
 import re
+import unicodedata
 import pandas as pd
 import numpy as np
 
@@ -34,6 +35,12 @@ REVENUE_CANDIDATES: list[str] = [
     "invoiced_amount",
     "billing_amount",
     "subtotal",
+    "ventes",
+    "chiffre_affaires",
+    "chiffredaffaires",
+    "ingresos",
+    "benefice",
+    "umsatz",
 ]
 
 QUANTITY_CANDIDATES: list[str] = [
@@ -56,6 +63,10 @@ QUANTITY_CANDIDATES: list[str] = [
     "itemscount",
     "items",
     "no_of_items",
+    "quantite",
+    "cantidad",
+    "unites",
+    "menge",
 ]
 
 UNIT_PRICE_CANDIDATES: list[str] = [
@@ -73,6 +84,16 @@ UNIT_PRICE_CANDIDATES: list[str] = [
     "costperunit",
     "selling_price",
     "sellingprice",
+    "prix_unitaire",
+    "prixunitaire",
+    "prix",
+    "cout",
+    "cout_unitaire",
+    "coutunitaire",
+    "precio_unitario",
+    "preciounitario",
+    "precio",
+    "einzelpreis",
 ]
 
 STATUS_CANDIDATES: list[str] = [
@@ -83,14 +104,21 @@ STATUS_CANDIDATES: list[str] = [
     "delivery_status",
     "payment_status",
     "fulfillment_status",
+    "statut",
+    "etat",
+    "estado",
 ]
 
 
 def _clean_header(name: str) -> str:
-    """Normalize a column header by stripping brackets, punctuation, and whitespace."""
+    """Normalize a column header by stripping brackets, accents, punctuation, and whitespace."""
     # Strip parenthetical/bracketed qualifiers like ($), [USD], (Units)
     no_brackets = re.sub(r"[\(\[\{].*?[\)\]\}]", "", str(name))
-    return re.sub(r"[^a-z0-9]", "", no_brackets.lower())
+    # Normalize unicode (NFKD decomposes accented characters, e.g., 'é' -> 'e' + combining acute accent)
+    normalized = unicodedata.normalize("NFKD", no_brackets)
+    # Strip combining diacritical marks (Unicode category 'Mn') to extract base ASCII Latin characters
+    ascii_clean = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9]", "", ascii_clean.lower())
 
 
 def _match_column(df_columns: list[str], candidates: list[str]) -> str | None:
