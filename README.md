@@ -7,10 +7,12 @@
 [![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-1.3+-F7931E?logo=scikit-learn&logoColor=white)](https://scikit-learn.org/)
 [![Plotly](https://img.shields.io/badge/Plotly-5.22+-3F4F75?logo=plotly&logoColor=white)](https://plotly.com/)
 [![Openpyxl](https://img.shields.io/badge/Openpyxl-3.1+-217346?logo=microsoft-excel&logoColor=white)](https://openpyxl.readthedocs.io/)
-[![Tests](https://img.shields.io/badge/Tests-105%20Passing-brightgreen?logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-105%20Passing-brightgreen?logo=python&logoColor=white)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Smart Business Data Analytics & Decision Support System**  
+> **Turn Data Into Decisions**  
+> *Smart Business Data Analytics & Decision Support System*
+> 
 > InsightFlow is an exploratory business data analytics and decision intelligence workspace built with Python and Streamlit. Designed around a **Futuristic Purple Glass Analytics Studio** interface, InsightFlow transforms heterogeneous CSV and Excel spreadsheets into structured operational intelligence through in-memory profiling, multi-dimensional slicing, rule-based automated insights, machine learning, and multi-sheet formatted Excel reporting.
 
 ---
