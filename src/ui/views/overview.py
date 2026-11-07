@@ -18,6 +18,7 @@ from src.visualization.charts import (
     plot_numerical_distribution,
     plot_categorical_frequency,
 )
+from src.ui.feedback import render_feedback_section
 
 
 def render_overview_view() -> None:
@@ -335,3 +336,6 @@ def render_overview_view() -> None:
         "⚡ **Start Analysing:** Switch to **📤 Data Upload** in the sidebar to upload your business dataset, "
         "or select **sample_business_sales.csv** from the project directory to test all analytics routines."
     )
+
+    # 6. Community Feedback & Suggestions
+    render_feedback_section()
